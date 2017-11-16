@@ -1,0 +1,9 @@
+first terminal: 
+run roscore
+
+second terminal: 
+sudo su (to run as superuser to access GPIO)
+rosrun motor_control pwm_control
+
+third terminal: 
+rosrun motor_control sender

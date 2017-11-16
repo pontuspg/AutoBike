@@ -1,0 +1,3 @@
+<launch>
+<node pkg="rc_controller" type="rc_control_node" name="RC_node" />
+</launch>
