@@ -5,6 +5,7 @@
 #include "time.h"
 #include <geometry_msgs/Twist.h>
 #include <sensor_msgs/Joy.h>
+#include <std_msgs/Float32.h>
 #include <signal.h>
 
 //#define PPR 55500 //pulses per revolution
@@ -26,7 +27,7 @@ int vel_data = 0;
 int speed = 000000;
 
 
-double currentAngle = 0.0;
+float currentAngle = 0.0;
 double PPR = 55500.0;
 
 int encoderA = 0;
@@ -301,6 +302,7 @@ int main (int argc, char **argv)
   ros::NodeHandle node;
   
   geometry_msgs::Twist speed_msg;
+  std_msgs::Float32 rotation_msg;
   signal (SIGINT, sigintHandler);
   ros::Rate rate(100);  // hz
   
@@ -343,11 +345,14 @@ gpioSetAlertFunc(ENCODERB, encoderInterruptB);
 gpioSetAlertFunc(PPM, interruptPPM);
 
 ros::Publisher pub_speed = node.advertise<geometry_msgs::Twist>("speed_topic", 10);
+ros::Publisher pub_rotation = node.advertise<std_msgs::Float32>("rotation_topic",10);
 
 while(ros::ok()) {
 	ros::Subscriber vel_sub = node.subscribe("sender_topic",10, velCallback);
-	ROS_INFO("[%lf]",currentAngle);	
-	
+	//ROS_INFO("[%lf]",currentAngle);	
+	rotation_msg.data = currentAngle;
+  	pub_rotation.publish(rotation_msg);
+
 	speed_msg.linear.x = linearSpeed;
 	speed_msg.angular.x = angularSpeed;
 
