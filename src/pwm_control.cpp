@@ -8,6 +8,7 @@
 #include <std_msgs/Float32.h>
 #include <signal.h>
 
+
 //#define PPR 55500 //pulses per revolution
 #define GEAR_RATIO 111
 #define NUM_REV 1
@@ -67,9 +68,11 @@ float linearSpeed = 0;
 float r = 0.36;
 
 int balance = 0;
+int maxAngle = 35;
+sig_atomic_t volatile requestShutdown = 0;
 
 //Exit routine
-void sigintHandler (int sig){
+void mySigintHandler (int sig){
 	
 	
 	//Turn off motors
@@ -80,7 +83,7 @@ void sigintHandler (int sig){
 	//Exit gpio library
 	gpioTerminate();
 	//Exit ROS
-	ros::shutdown();
+	requestShutdown = 1;
 }
 
 
@@ -117,8 +120,8 @@ void interruptPPM(int gpio, int level, uint32_t tick){
 				       	
 					//Right		
 					stickVal = abs(channels[3]-1530);
-					gpioWrite(DIR,1);
-					if(currentAngle > 90){
+					gpioWrite(DIR,0);
+					if(currentAngle > maxAngle){
 						gpioHardwarePWM(GPIO,50000,0);
 					}else{
 						gpioHardwarePWM(GPIO,50000,stickVal*500);
@@ -126,8 +129,8 @@ void interruptPPM(int gpio, int level, uint32_t tick){
 				}else if(channels[3] < 1470 && stop == 0 && balance == 0){	
 					//Left		
 					stickVal = abs(channels[3]-1470);
-					gpioWrite(DIR,0);
-					if(currentAngle < -90){
+					gpioWrite(DIR,1);
+					if(currentAngle < -maxAngle){
 						gpioHardwarePWM(GPIO,50000,0);
 					}else{
 						gpioHardwarePWM(GPIO,50000,stickVal*500);
@@ -206,13 +209,16 @@ void encoderInterruptA(int gpio, int level, uint32_t tick){
 	//If the motor is rotating counter clockwise channel B will be high when channel A has a 	  
 	//rising edge
 	if(encoderA == 1 && encoderB == 0){
-		CW = 1;
+		//CW = 1;
 		//Adding the angle of one pulse in the direction the motor is rotating, (360/PPR = angle of one pulse)
 		deltaTime_angular = tick-previousTick_angular;
 		
 		//Adding the angle of one pulse in the direction the motor is rotating	
-		currentAngle = currentAngle + (360/PPR);
-		
+		currentAngle = currentAngle - (360/PPR);
+		if(currentAngle < -maxAngle){
+			gpioHardwarePWM(GPIO,50000,0);
+			ROS_INFO("Angle: [%lf]",currentAngle);	
+		}
 
 		//Calculate angular velocity
 		angularSpeed = (360/PPR)/(deltaTime_angular/1000000);
@@ -220,10 +226,15 @@ void encoderInterruptA(int gpio, int level, uint32_t tick){
 		//Get new latest tick time
 		previousTick_angular = tick;
 	}else if(encoderA == 1 && encoderB == 1){
-		CW = 0;
+		//CW = 0;
 		deltaTime_angular = tick-previousTick_angular;
 		//Adding the angle of one pulse in the direction the motor is rotating
-		currentAngle = currentAngle - (360/PPR);
+		
+		currentAngle = currentAngle + (360/PPR);
+		if(currentAngle > maxAngle){
+			gpioHardwarePWM(GPIO,50000,0);
+			ROS_INFO("Angle: [%f]",currentAngle);
+		}
 		//Calculate angular velocity
 		angularSpeed = -(360/PPR)/(deltaTime_angular/1000000);
 		
@@ -249,9 +260,9 @@ void velCallback(const geometry_msgs::Twist::ConstPtr& vel) {
 		if(speed < 1000000){
 			speed = speed+30000;
 			if(speed < 0){
-				gpioWrite(DIR,0);
-			}else{
 				gpioWrite(DIR,1);
+			}else{
+				gpioWrite(DIR,0);
 			}
 			gpioHardwarePWM(GPIO,50000,abs(speed));
 			printf("Duty cycle increased to: [%f] \n",(float)gpioGetPWMdutycycle(18)/1000000);
@@ -267,9 +278,9 @@ void velCallback(const geometry_msgs::Twist::ConstPtr& vel) {
 		if(speed > -1000000){
 			speed = speed-30000;
 			if(speed < 0){
-				gpioWrite(DIR,0);
-			}else{
 				gpioWrite(DIR,1);
+			}else{
+				gpioWrite(DIR,0);
 			}
 			gpioHardwarePWM(GPIO,50000,abs(speed));
 			printf("Duty cycle decreased to: [%f] \n",(float)gpioGetPWMdutycycle(18)/1000000);
@@ -284,24 +295,25 @@ void velCallback(const geometry_msgs::Twist::ConstPtr& vel) {
 		
 		//Negative or positive angle, i.e direction of the motor
 		
-		if(currentAngle < vel->linear.y){
-			gpioWrite(DIR,1);
+		if(currentAngle > vel->linear.y){
+			gpioWrite(DIR,0);
 			ROS_INFO("CW");
-			while(currentAngle <= vel->linear.y){	
+			while(currentAngle >= vel->linear.y){	
 				if(stop == 1){
 					break;
 				}
 			}
 			
-		}else if(currentAngle  > vel->linear.y){
-			gpioWrite(DIR,0);
+		}else if(currentAngle < vel->linear.y){
+			gpioWrite(DIR,1);
 			ROS_INFO("CCW");
-			while(currentAngle >= vel->linear.y){
+			while(currentAngle <= vel->linear.y){
 				if(stop == 1){
 					break;
 				}	
 			}
 		}
+		ROS_INFO("angularSpeed:[%lf] ",angularSpeed);
 
 		speed = 0;
 		gpioWrite(DIR,0);
@@ -318,23 +330,24 @@ void controlCallback(const std_msgs::Float32 velMotor){
 	if(balance == 1){		
 			
 		//Calculate duty cycle to get correct speed
-		speed = (7*velMotor.data*(180/PI))/32+5/4;
+		//function to get from speed rad/s to duty cycle
+		speed = (0.234448*velMotor.data)*(180/PI);
 	
 		//set motor to the correct direction
 		if(velMotor.data > 0.0){
-			gpioWrite(DIR,1);
+			gpioWrite(DIR,0);
 			CW = 1;
 
 		//If velMotor is negative change direction	
 		}else if(velMotor.data < 0.0){		
-			gpioWrite(DIR,0);
+			gpioWrite(DIR,1);
 			CW = 0;
 		}
 
 		//Set PWM
-		if(CW == 1 && currentAngle > 90){
+		if(CW == 1 && currentAngle > 35){
 			gpioHardwarePWM(GPIO,50000,speed*0);
-		}else if(CW == 0 && currentAngle < -90){
+		}else if(CW == 0 && currentAngle < -35){
 			gpioHardwarePWM(GPIO,50000,speed*0);
 		}else{
 			gpioHardwarePWM(GPIO,50000,abs(speed*10000));
@@ -353,9 +366,10 @@ int main (int argc, char **argv)
   
   geometry_msgs::Twist speed_msg;
   std_msgs::Float32 rotation_msg;
-
-  signal (SIGINT, sigintHandler);
-  ros::Rate rate(100);  // hz
+  
+  
+  signal (SIGINT, mySigintHandler);
+  ros::Rate rate(10);  // hz
   
 
 
@@ -363,15 +377,18 @@ int turn = 0;
 
 gpioCfgClock(1,1,0);
 
-  if (gpioInitialise() < 0)
-{
-   ROS_INFO("init failed\n");// pigpio initialisation failed.
-   return 0;
-}else
-{
-   // pigpio initialised okay.
-   ROS_INFO("init ok\n");
-}
+  if (gpioInitialise() < 0){
+  	ROS_INFO("init failed, reseting gpio and trying again\n");// pigpio initialisation failed.
+  	gpioTerminate();
+  	if(gpioInitialise() < 0){
+		ROS_INFO("init failed again, exiting");
+		return 0;
+  	}
+  }else{
+  	// pigpio initialised okay.
+  	ROS_INFO("init ok\n");
+  }
+  
 
 //Set gpio mode for the needed GPIO pins
 gpioSetMode(SOFTPWM,PI_OUTPUT);
@@ -409,7 +426,7 @@ ros::Publisher pub_rotation = node.advertise<std_msgs::Float32>("rotation_topic"
 ros::Subscriber vel_sub = node.subscribe("sender_topic",10, velCallback);
 ros::Subscriber control_sub = node.subscribe("control",10,controlCallback);
 
-while(ros::ok()) {
+while(requestShutdown == 0) {
 	
 	//ROS_INFO("[%lf]",currentAngle);	
 	rotation_msg.data = currentAngle;
@@ -423,5 +440,7 @@ while(ros::ok()) {
 	ros::spinOnce();
 	rate.sleep();
 }
+
+ros::shutdown();
 return 0;
 }

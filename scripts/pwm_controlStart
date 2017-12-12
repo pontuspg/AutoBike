@@ -1,0 +1,11 @@
+#!/bin/bash
+#
+# script to start the pwm_control node
+#
+#
+#
+
+
+
+echo "Starting pwm_control node in super user mode from script"
+
